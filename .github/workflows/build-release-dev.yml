@@ -185,12 +185,12 @@ jobs:
         run: |
           set -euo pipefail
           if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            # Tag already exists from the push trigger; do not pass --target (commitish).
             gh release create "$TAG" \
               --repo "$GITHUB_REPOSITORY" \
               --title "GitComet $TAG (dev)" \
               --notes "Development/fork test build. Not for production distribution." \
-              --prerelease \
-              --target "$TAG"
+              --prerelease
           else
             gh release edit "$TAG" \
               --repo "$GITHUB_REPOSITORY" \
