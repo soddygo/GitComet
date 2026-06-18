@@ -165,6 +165,7 @@ fn app_mode_uses_gpui(mode: &AppMode) -> bool {
         AppMode::Setup { .. } | AppMode::Uninstall { .. } | AppMode::ExtractMergeFixtures(_) => {
             false
         }
+        AppMode::ApplyUpdate(_) => false,
     }
 }
 

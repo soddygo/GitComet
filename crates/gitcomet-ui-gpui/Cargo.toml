@@ -93,6 +93,10 @@ smallvec = { workspace = true }
 smol = { workspace = true }
 stats_alloc = { workspace = true }
 tempfile = { workspace = true }
+flate2 = { workspace = true }
+tar = { workspace = true }
+zip = { workspace = true }
+dirs = { workspace = true }
 tree-sitter = { workspace = true }
 tree-sitter-bash = { workspace = true, optional = true }
 tree-sitter-bicep = { workspace = true, optional = true }

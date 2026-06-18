@@ -161,6 +161,16 @@ struct UiSessionFile {
     repo_history_scopes: Option<BTreeMap<String, HistoryScopeSetting>>,
     repo_fetch_prune_deleted_remote_tracking_branches: Option<BTreeMap<String, bool>>,
     survey_prompt: Option<SurveyPromptSession>,
+    #[serde(default)]
+    update_prompt: Option<UpdatePromptSession>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+struct UpdatePromptSession {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dismissed_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    postponed_until_unix_seconds: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -952,6 +962,103 @@ pub fn persist_survey_prompt_opened_to_path(
         postponed_until_unix_seconds: None,
     });
 
+    persist_to_path(session_file_path, &file)
+}
+
+pub fn should_show_update_toast(latest_version: &str) -> bool {
+    let Some(session_file_path) = default_session_file_path() else {
+        return true;
+    };
+    should_show_update_toast_from_path(&session_file_path, latest_version, current_unix_seconds())
+}
+
+pub fn should_show_update_toast_from_path(
+    session_file_path: &Path,
+    latest_version: &str,
+    now_unix_seconds: u64,
+) -> bool {
+    let Some(file) = load_file(session_file_path) else {
+        return true;
+    };
+    let Some(prompt) = file.update_prompt else {
+        return true;
+    };
+    if prompt
+        .dismissed_version
+        .as_deref()
+        .is_some_and(|dismissed| dismissed == latest_version)
+    {
+        return false;
+    }
+    prompt
+        .postponed_until_unix_seconds
+        .is_none_or(|postponed_until| postponed_until <= now_unix_seconds)
+}
+
+pub fn is_update_dismissed_for_version(latest_version: &str) -> bool {
+    let Some(session_file_path) = default_session_file_path() else {
+        return false;
+    };
+    is_update_dismissed_for_version_from_path(&session_file_path, latest_version)
+}
+
+pub fn is_update_dismissed_for_version_from_path(
+    session_file_path: &Path,
+    latest_version: &str,
+) -> bool {
+    let Some(file) = load_file(session_file_path) else {
+        return false;
+    };
+    let Some(prompt) = file.update_prompt else {
+        return false;
+    };
+    prompt
+        .dismissed_version
+        .as_deref()
+        .is_some_and(|dismissed| dismissed == latest_version)
+}
+
+pub fn persist_update_dismissed(version: &str) -> io::Result<()> {
+    let Some(session_file_path) = default_session_file_path() else {
+        return Ok(());
+    };
+    persist_update_dismissed_to_path(&session_file_path, version)
+}
+
+pub fn persist_update_dismissed_to_path(session_file_path: &Path, version: &str) -> io::Result<()> {
+    let mut file = load_file(session_file_path).unwrap_or_default();
+    file.version = CURRENT_SESSION_FILE_VERSION;
+    file.update_prompt = Some(UpdatePromptSession {
+        dismissed_version: Some(version.to_string()),
+        postponed_until_unix_seconds: None,
+    });
+    persist_to_path(session_file_path, &file)
+}
+
+pub fn persist_update_postponed(postpone_seconds: u64) -> io::Result<()> {
+    let Some(session_file_path) = default_session_file_path() else {
+        return Ok(());
+    };
+    persist_update_postponed_to_path(
+        &session_file_path,
+        current_unix_seconds().saturating_add(postpone_seconds),
+    )
+}
+
+pub fn persist_update_postponed_to_path(
+    session_file_path: &Path,
+    postponed_until_unix_seconds: u64,
+) -> io::Result<()> {
+    let mut file = load_file(session_file_path).unwrap_or_default();
+    file.version = CURRENT_SESSION_FILE_VERSION;
+    let dismissed_version = file
+        .update_prompt
+        .as_ref()
+        .and_then(|prompt| prompt.dismissed_version.clone());
+    file.update_prompt = Some(UpdatePromptSession {
+        dismissed_version,
+        postponed_until_unix_seconds: Some(postponed_until_unix_seconds),
+    });
     persist_to_path(session_file_path, &file)
 }
 
@@ -1847,6 +1954,35 @@ mod tests {
             &session_file,
             NEXT_SURVEY_ID,
             300
+        ));
+    }
+
+    #[test]
+    fn update_toast_prompt_respects_dismiss_and_postpone() {
+        const VERSION: &str = "1.2.3";
+        const POSTPONE_SECONDS: u64 = 60;
+        let dir = unique_session_test_dir("update-prompt");
+        let session_file = dir.join("session.json");
+
+        assert!(should_show_update_toast_from_path(&session_file, VERSION, 100));
+
+        persist_update_dismissed_to_path(&session_file, VERSION).expect("dismiss update");
+        assert!(!should_show_update_toast_from_path(&session_file, VERSION, 100));
+        assert!(is_update_dismissed_for_version_from_path(&session_file, VERSION));
+        assert!(!is_update_dismissed_for_version_from_path(&session_file, "1.2.4"));
+        assert!(should_show_update_toast_from_path(&session_file, "1.2.4", 100));
+
+        persist_update_postponed_to_path(&session_file, 100 + POSTPONE_SECONDS)
+            .expect("postpone update");
+        assert!(!should_show_update_toast_from_path(
+            &session_file,
+            "1.2.4",
+            100 + POSTPONE_SECONDS - 1
+        ));
+        assert!(should_show_update_toast_from_path(
+            &session_file,
+            "1.2.4",
+            100 + POSTPONE_SECONDS
         ));
     }
 

@@ -147,6 +147,8 @@ mod toast_host;
 mod tooltip;
 mod tooltip_host;
 mod update_check;
+mod auto_update;
+mod update_service;
 mod user_survey;
 mod word_diff;
 
@@ -1145,6 +1147,10 @@ impl GitCometView {
             auth_prompt_secret_input,
             auth_prompt_key: None,
             active_context_menu_invoker: None,
+            update_phase: update_service::UpdatePhase::Idle,
+            available_update: None,
+            update_in_progress: false,
+            update_status_line: "Check for updates to see status.".into(),
         };
 
         view.set_theme(initial_theme, cx);
@@ -2178,13 +2184,11 @@ impl GitCometView {
             .update(cx, |host, cx| host.push_toast(kind, message, cx));
     }
 
-    #[cfg_attr(test, allow(dead_code))]
-    fn push_toast_with_link(
+    fn push_toast_with_actions(
         &mut self,
         kind: components::ToastKind,
         message: String,
-        link_url: String,
-        link_label: String,
+        actions: Vec<mod_helpers::ToastAction>,
         cx: &mut gpui::Context<Self>,
     ) {
         if matches!(kind, components::ToastKind::Error) {
@@ -2192,7 +2196,14 @@ impl GitCometView {
             return;
         }
         self.toast_host.update(cx, |host, cx| {
-            host.push_toast_with_link(kind, message, link_url, link_label, cx)
+            host.push_toast_inner(
+                kind,
+                message,
+                actions,
+                mod_helpers::ToastDismissBehavior::Remove,
+                Some(std::time::Duration::from_secs(60)),
+                cx,
+            );
         });
     }
 

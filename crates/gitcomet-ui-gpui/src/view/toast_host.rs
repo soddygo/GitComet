@@ -218,38 +218,6 @@ impl ToastHost {
         );
     }
 
-    #[cfg_attr(test, allow(dead_code))]
-    pub(super) fn push_toast_with_link(
-        &mut self,
-        kind: components::ToastKind,
-        message: String,
-        link_url: String,
-        link_label: String,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        if matches!(kind, components::ToastKind::Error)
-            && self.route_error_to_banner(message.clone(), cx)
-        {
-            return;
-        }
-        let ttl = match kind {
-            components::ToastKind::Error => Duration::from_secs(15),
-            components::ToastKind::Warning => Duration::from_secs(10),
-            components::ToastKind::Success => Duration::from_secs(6),
-        };
-        let _ = self.push_toast_inner(
-            kind,
-            message,
-            vec![ToastAction::OpenUrl {
-                url: link_url,
-                label: link_label,
-            }],
-            ToastDismissBehavior::Remove,
-            Some(ttl),
-            cx,
-        );
-    }
-
     pub(super) fn push_survey_toast(
         &mut self,
         survey_id: &str,
@@ -288,7 +256,7 @@ impl ToastHost {
         );
     }
 
-    fn push_toast_inner(
+    pub(super) fn push_toast_inner(
         &mut self,
         kind: components::ToastKind,
         message: String,
@@ -449,6 +417,32 @@ impl ToastHost {
                     },
                     cx,
                 );
+            }
+            ToastAction::StartUpdate {
+                download_url,
+                target_version,
+                ..
+            } => {
+                self.remove_toast(id, cx);
+                let _ = self.root_view.update(cx, |root, cx| {
+                    root.begin_update_download(download_url, target_version, cx);
+                });
+            }
+            ToastAction::PostponeUpdate {
+                version,
+                postpone_seconds,
+                ..
+            } => {
+                self.remove_toast(id, cx);
+                let _ = self.root_view.update(cx, |root, cx| {
+                    root.postpone_update(&version, postpone_seconds, cx);
+                });
+            }
+            ToastAction::DismissUpdate { version, .. } => {
+                self.remove_toast(id, cx);
+                let _ = self.root_view.update(cx, |root, cx| {
+                    root.dismiss_update_version(&version, cx);
+                });
             }
         }
     }
@@ -781,13 +775,20 @@ impl Render for ToastHost {
                             let label = match action {
                                 ToastAction::OpenUrl { label, .. }
                                 | ToastAction::OpenSurvey { label, .. }
-                                | ToastAction::PostponeSurvey { label, .. } => label.clone(),
+                                | ToastAction::PostponeSurvey { label, .. }
+                                | ToastAction::StartUpdate { label, .. }
+                                | ToastAction::PostponeUpdate { label, .. }
+                                | ToastAction::DismissUpdate { label, .. } => label.clone(),
                             };
                             let style = match action {
-                                ToastAction::PostponeSurvey { .. } => {
+                                ToastAction::PostponeSurvey { .. }
+                                | ToastAction::PostponeUpdate { .. }
+                                | ToastAction::DismissUpdate { .. } => {
                                     components::ButtonStyle::Transparent
                                 }
-                                ToastAction::OpenUrl { .. } | ToastAction::OpenSurvey { .. } => {
+                                ToastAction::OpenUrl { .. }
+                                | ToastAction::OpenSurvey { .. }
+                                | ToastAction::StartUpdate { .. } => {
                                     components::ButtonStyle::Outlined
                                 }
                             };

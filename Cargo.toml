@@ -42,6 +42,7 @@ gitcomet-ui-gpui = { path = "crates/gitcomet-ui-gpui", default-features = false 
 # External crates
 clap = { version = "4.6.1", features = ["derive"] }
 criterion = "0.8.2"
+dirs = "6.0.0"
 fontdb = "0.23.0"
 futures = "0.3.32"
 gix = { version = "0.84.0", default-features = false, features = ["max-performance-safe", "comfort", "basic", "auto-chain-error", "status", "blame", "sha1"] }
@@ -68,6 +69,9 @@ smol = "2.0.2"
 stats_alloc = { version = "0.1.10", features = ["nightly"] }
 strsim = "0.11.1"
 tempfile = "3.27.0"
+flate2 = "1.1.9"
+tar = "0.4.46"
+zip = { version = "2", default-features = false, features = ["deflate"] }
 thiserror = "2.0"
 tree-sitter = "0.26.9"
 tree-sitter-bash = "0.25.1"

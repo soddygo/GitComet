@@ -623,6 +623,20 @@ pub(super) enum ToastAction {
         postpone_seconds: u64,
         label: String,
     },
+    StartUpdate {
+        download_url: String,
+        target_version: String,
+        label: String,
+    },
+    PostponeUpdate {
+        version: String,
+        postpone_seconds: u64,
+        label: String,
+    },
+    DismissUpdate {
+        version: String,
+        label: String,
+    },
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -3340,6 +3354,11 @@ pub struct GitCometView {
     pub(super) auth_prompt_secret_input: Entity<components::TextInput>,
     pub(super) auth_prompt_key: Option<String>,
     pub(super) active_context_menu_invoker: Option<SharedString>,
+
+    pub(super) update_phase: super::update_service::UpdatePhase,
+    pub(super) available_update: Option<super::update_check::UpdateNotice>,
+    pub(super) update_in_progress: bool,
+    pub(super) update_status_line: SharedString,
 }
 
 pub(super) struct DiffTextLayoutCacheEntry {

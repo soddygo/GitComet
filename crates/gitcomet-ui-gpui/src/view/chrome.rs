@@ -25,6 +25,7 @@ pub(super) struct TitleBarView {
     title_drag_state: TitleBarDragState,
     app_menu_open: bool,
     workspace_actions_enabled: bool,
+    update_available: bool,
 }
 
 #[derive(Debug, Default, Clone, Copy, Eq, PartialEq)]
@@ -282,7 +283,16 @@ impl TitleBarView {
             title_drag_state: TitleBarDragState::default(),
             app_menu_open: false,
             workspace_actions_enabled,
+            update_available: false,
         }
+    }
+
+    pub(super) fn set_update_available(&mut self, available: bool, cx: &mut gpui::Context<Self>) {
+        if self.update_available == available {
+            return;
+        }
+        self.update_available = available;
+        cx.notify();
     }
 
     pub(super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
@@ -610,6 +620,31 @@ impl Render for TitleBarView {
             .gitcomet_tooltip(theme, free_badge_tooltip.clone())
             .child("FREE");
 
+        let root_view_for_update = self.root_view.clone();
+        let update_badge_tooltip: SharedString = "Update available".into();
+        let update_badge = div()
+            .id("update_badge")
+            .debug_selector(|| "titlebar_update_badge".to_string())
+            .size(px(24.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(4.0))
+            .cursor(CursorStyle::PointingHand)
+            .hover(move |s| s.bg(with_alpha(theme.colors.accent, if theme.is_dark { 0.18 } else { 0.12 })))
+            .active(move |s| s.bg(with_alpha(theme.colors.accent, if theme.is_dark { 0.28 } else { 0.20 })))
+            .on_click(cx.listener(move |_this, _e: &ClickEvent, _window, cx| {
+                cx.stop_propagation();
+                let _ = root_view_for_update.update(cx, |root, cx| {
+                    root.show_update_prompt(cx);
+                });
+            }))
+            .gitcomet_tooltip(theme, update_badge_tooltip)
+            .child(titlebar_control_icon(
+                "icons/generic_upgrade.svg",
+                theme.colors.accent,
+            ));
+
         let macos_brand = div()
             .id("title_bar_macos_brand")
             .h_full()
@@ -667,6 +702,7 @@ impl Render for TitleBarView {
                     .flex()
                     .items_center()
                     .gap(px(4.0))
+                    .when(self.update_available, |d| d.child(update_badge))
                     .child(free_badge)
                     .when(!is_macos, |d| d.child(min).child(max).child(close))
                     .pr(px(8.0)),

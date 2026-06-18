@@ -197,6 +197,9 @@ pub(crate) struct SettingsWindowView {
     current_view: SettingsView,
     open_source_licenses_scroll: UniformListScrollHandle,
     runtime_info: SettingsRuntimeInfo,
+    update_status_line: SharedString,
+    update_available: bool,
+    update_check_in_progress: bool,
     git_executable_mode: GitExecutableMode,
     git_custom_path_draft: String,
     git_executable_input: Entity<components::TextInput>,
@@ -234,7 +237,15 @@ pub(crate) fn open_settings_window(cx: &mut App) {
         settings_window_options_for_scale(bounds, ui_scale_percent),
         move |window, cx| {
             ui_scale::apply_to_window(window, ui_scale_percent);
-            cx.new(|cx| SettingsWindowView::new(window, cx))
+            let settings = cx.new(|cx| SettingsWindowView::new(window, cx));
+            for main_window in cx.windows() {
+                if let Some(main) = main_window.downcast::<GitCometView>() {
+                    let _ = main.update(cx, |view, _window, cx| {
+                        view.sync_settings_update_status(cx);
+                    });
+                }
+            }
+            settings
         },
     )
     .expect("failed to open settings window");
@@ -642,6 +653,9 @@ impl SettingsWindowView {
             current_view: SettingsView::Root,
             open_source_licenses_scroll: UniformListScrollHandle::default(),
             runtime_info,
+            update_status_line: "Check for updates to see status.".into(),
+            update_available: false,
+            update_check_in_progress: false,
             git_executable_mode,
             git_custom_path_draft,
             git_executable_input,
@@ -802,6 +816,42 @@ impl SettingsWindowView {
             },
         )
         .detach();
+    }
+
+    pub(in crate::view) fn set_update_settings_state(
+        &mut self,
+        status_line: SharedString,
+        update_available: bool,
+        update_check_in_progress: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let changed = self.update_status_line != status_line
+            || self.update_available != update_available
+            || self.update_check_in_progress != update_check_in_progress;
+        if !changed {
+            return;
+        }
+        self.update_status_line = status_line;
+        self.update_available = update_available;
+        self.update_check_in_progress = update_check_in_progress;
+        cx.notify();
+    }
+
+    fn check_for_updates_from_settings(&mut self, cx: &mut gpui::Context<Self>) {
+        self.update_check_in_progress = true;
+        self.update_status_line = "Checking for updates…".into();
+        cx.notify();
+        self.update_main_windows(cx, |view, _window, cx| {
+            view.check_for_updates(true, cx);
+        });
+    }
+
+    fn begin_update_from_settings(&mut self, cx: &mut gpui::Context<Self>) {
+        self.update_main_windows(cx, |view, _window, cx| {
+            if let Some(notice) = view.available_update.clone() {
+                view.begin_upgrade_from_notice(&notice, cx);
+            }
+        });
     }
 
     fn selected_git_executable_path(&self) -> Option<std::path::PathBuf> {
@@ -3453,6 +3503,45 @@ impl Render for SettingsWindowView {
                             self.runtime_info.app_version_display.clone(),
                             theme,
                         ))
+                        .child(self.info_row(
+                            "settings_window_update_status",
+                            "Status",
+                            self.update_status_line.clone(),
+                            theme,
+                        ))
+                        .child(
+                            div()
+                                .id("settings_window_update_actions")
+                                .w_full()
+                                .px_2()
+                                .pb_1()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .child(
+                                    components::Button::new(
+                                        "settings_window_check_for_updates",
+                                        "Check for updates",
+                                    )
+                                    .style(components::ButtonStyle::Outlined)
+                                    .disabled(self.update_check_in_progress)
+                                    .on_click(theme, cx, |this, _e, _window, cx| {
+                                        this.check_for_updates_from_settings(cx);
+                                    }),
+                                )
+                                .when(self.update_available, |row| {
+                                    row.child(
+                                        components::Button::new(
+                                            "settings_window_update_now",
+                                            "Update now",
+                                        )
+                                        .style(components::ButtonStyle::Filled)
+                                        .on_click(theme, cx, |this, _e, _window, cx| {
+                                            this.begin_update_from_settings(cx);
+                                        }),
+                                    )
+                                }),
+                        )
                         .child(self.info_row(
                             "settings_window_os",
                             "Operating system",

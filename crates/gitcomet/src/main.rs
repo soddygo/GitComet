@@ -162,6 +162,16 @@ fn main() {
 
     install_configured_git_executable_preference(&mode);
 
+    if let AppMode::ApplyUpdate(request) = &mode {
+        match request.clone().run() {
+            Ok(()) => std::process::exit(exit_code::SUCCESS),
+            Err(err) => {
+                eprintln!("{err}");
+                std::process::exit(exit_code::ERROR);
+            }
+        }
+    }
+
     #[cfg(all(target_os = "linux", feature = "ui-gpui-runtime"))]
     if let Some(code) = maybe_relaunch_with_linux_x11_fallback(&mode) {
         std::process::exit(code);
@@ -303,6 +313,7 @@ fn main() {
         AppMode::ExtractMergeFixtures(config) => {
             run_and_exit(extract_fixtures_mode::run_extract_merge_fixtures(&config))
         }
+        AppMode::ApplyUpdate(_) => unreachable!("apply-update is handled before GPUI startup"),
     }
 }
 

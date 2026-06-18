@@ -9,6 +9,7 @@
 //! - `extract-merge-fixtures`: generate Phase 3C real-world merge fixtures
 
 use clap::{Parser, Subcommand};
+use gitcomet_core::apply_update::ApplyUpdateRequest;
 use gitcomet_core::merge::{ConflictStyle, DEFAULT_MARKER_SIZE, DiffAlgorithm};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -51,6 +52,23 @@ pub enum Command {
     Uninstall(UninstallArgs),
     /// Extract non-trivial merge cases from git history as fixture files.
     ExtractMergeFixtures(ExtractMergeFixturesArgs),
+    /// Apply a downloaded update (internal use).
+    #[command(hide = true)]
+    ApplyUpdate(ApplyUpdateArgs),
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ApplyUpdateArgs {
+    #[arg(long)]
+    pub wait_pid: u32,
+    #[arg(long)]
+    pub target_exe: PathBuf,
+    #[arg(long)]
+    pub new_binary: PathBuf,
+    #[arg(long)]
+    pub staging_dir: PathBuf,
+    #[arg(long)]
+    pub app_bundle: Option<PathBuf>,
 }
 
 #[derive(clap::Args, Debug)]
@@ -227,6 +245,8 @@ pub enum AppMode {
     Uninstall { dry_run: bool, local: bool },
     /// Generate merge fixtures from repository history.
     ExtractMergeFixtures(ExtractMergeFixturesConfig),
+    /// Apply a downloaded update (internal use).
+    ApplyUpdate(gitcomet_core::apply_update::ApplyUpdateRequest),
 }
 
 // ── Environment lookup trait for testability ─────────────────────────
@@ -681,6 +701,13 @@ fn parse_app_mode_from_args_env_and_config(
             Some(Command::ExtractMergeFixtures(args)) => {
                 resolve_extract_merge_fixtures(args).map(AppMode::ExtractMergeFixtures)
             }
+            Some(Command::ApplyUpdate(args)) => Ok(AppMode::ApplyUpdate(ApplyUpdateRequest {
+                wait_pid: args.wait_pid,
+                target_exe: args.target_exe,
+                new_binary: args.new_binary,
+                staging_dir: args.staging_dir,
+                app_bundle: args.app_bundle,
+            })),
         },
         Err(clap_err) => {
             // --help and --version produce informational clap errors that

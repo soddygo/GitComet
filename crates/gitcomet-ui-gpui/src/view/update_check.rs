@@ -1,4 +1,3 @@
-use super::*;
 #[cfg(not(test))]
 use futures::{AsyncReadExt, future};
 #[cfg(not(test))]
@@ -9,17 +8,18 @@ use serde::Deserialize;
 #[cfg(not(test))]
 use std::sync::Arc;
 
-const UPDATE_CHECK_DISABLE_ENV: &str = "GITCOMET_NO_UPDATE_CHECK";
+pub(crate) const UPDATE_CHECK_DISABLE_ENV: &str = "GITCOMET_NO_UPDATE_CHECK";
 #[cfg(not(test))]
 const UPDATE_CHECK_REPO_ENV: &str = "GITCOMET_UPDATE_REPO";
 #[cfg(not(test))]
 const DEFAULT_UPDATE_REPO: &str = "GitComet/gitcomet";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct UpdateNotice {
-    latest_version: String,
-    current_version: String,
-    releases_url: String,
+pub(crate) struct UpdateNotice {
+    pub latest_version: String,
+    pub current_version: String,
+    pub releases_url: String,
+    pub download_url: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -28,64 +28,27 @@ struct GitHubRelease {
     tag_name: String,
     #[cfg_attr(not(test), serde(default))]
     html_url: Option<String>,
+    #[cfg_attr(not(test), serde(default))]
+    assets: Vec<GitHubReleaseAsset>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct GitHubRepo {
+#[cfg_attr(not(test), derive(Deserialize))]
+struct GitHubReleaseAsset {
+    name: String,
+    browser_download_url: String,
+    size: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GitHubRepo {
     owner: String,
     repo: String,
 }
 
-impl GitCometView {
-    pub(in crate::view) fn maybe_check_for_updates_on_startup(
-        &mut self,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        if self.view_mode != GitCometViewMode::Normal
-            || std::env::var_os(UPDATE_CHECK_DISABLE_ENV).is_some()
-        {
-            return;
-        }
-
-        #[cfg(test)]
-        let _ = cx;
-
-        #[cfg(not(test))]
-        let http_client = cx.http_client();
-
-        #[cfg(not(test))]
-        cx.spawn(
-            async move |view: WeakEntity<GitCometView>, cx: &mut gpui::AsyncApp| {
-                let notice = fetch_update_notice(
-                    env!("CARGO_PKG_VERSION"),
-                    resolve_update_repo(),
-                    http_client,
-                )
-                .await;
-                let Some(notice) = notice else {
-                    return;
-                };
-
-                let _ = view.update(cx, |this, cx| {
-                    this.push_toast_with_link(
-                        components::ToastKind::Warning,
-                        format!(
-                            "A newer GitComet version is available: {} (current {}).",
-                            notice.latest_version, notice.current_version
-                        ),
-                        notice.releases_url,
-                        "Open Releases".to_string(),
-                        cx,
-                    );
-                });
-            },
-        )
-        .detach();
-    }
-}
 
 #[cfg(not(test))]
-async fn fetch_update_notice(
+pub(crate) async fn fetch_update_notice(
     current_version: &'static str,
     repo: GitHubRepo,
     http_client: Arc<dyn HttpClient>,
@@ -158,11 +121,53 @@ fn build_update_notice(
         return None;
     }
 
+    let asset = resolve_platform_asset(&release.assets);
+    let download_url = asset.map(|a| a.browser_download_url.clone());
+
     Some(UpdateNotice {
         latest_version: latest_version.to_string(),
         current_version: current.to_string(),
         releases_url: latest_url,
+        download_url,
     })
+}
+
+fn resolve_platform_asset(assets: &[GitHubReleaseAsset]) -> Option<&GitHubReleaseAsset> {
+    let (os_part, arch_part, extension) = platform_asset_identifiers();
+    assets.iter().find(|a| {
+        let name = a.name.to_lowercase();
+        name.contains(os_part)
+            && name.contains(arch_part)
+            && name.ends_with(extension)
+    })
+}
+
+fn platform_asset_identifiers() -> (&'static str, &'static str, &'static str) {
+    let os_part = if cfg!(target_os = "macos") {
+        "macos"
+    } else if cfg!(target_os = "linux") {
+        "linux"
+    } else if cfg!(target_os = "windows") {
+        "windows"
+    } else {
+        ""
+    };
+
+    let arch_part = if cfg!(target_arch = "x86_64") {
+        "x86_64"
+    } else if cfg!(target_arch = "aarch64") {
+        "arm64"
+    } else {
+        ""
+    };
+
+    let extension = if cfg!(target_os = "windows") {
+        "-portable.zip"
+    } else {
+        ".tar.gz"
+    };
+
+    (os_part, arch_part, extension)
 }
 
 fn parse_semver_tag(raw: &str) -> Option<Version> {
@@ -186,7 +191,7 @@ fn parse_semver_tag(raw: &str) -> Option<Version> {
 }
 
 #[cfg(not(test))]
-fn resolve_update_repo() -> GitHubRepo {
+pub(crate) fn resolve_update_repo() -> GitHubRepo {
     std::env::var(UPDATE_CHECK_REPO_ENV)
         .ok()
         .as_deref()
@@ -258,6 +263,7 @@ mod tests {
         GitHubRelease {
             tag_name: tag_name.to_string(),
             html_url: html_url.map(ToOwned::to_owned),
+            assets: Vec::new(),
         }
     }
 
@@ -329,5 +335,56 @@ mod tests {
                 repo: "GitComet".to_string(),
             })
         );
+    }
+
+    #[test]
+    fn resolve_platform_asset_finds_matching_asset() {
+        let assets = vec![
+            GitHubReleaseAsset {
+                name: "gitcomet-v0.2.0-macos-arm64.tar.gz".to_string(),
+                browser_download_url: "https://example.com/macos-arm64.tar.gz".to_string(),
+                size: 100,
+            },
+            GitHubReleaseAsset {
+                name: "gitcomet-v0.2.0-linux-x86_64.tar.gz".to_string(),
+                browser_download_url: "https://example.com/linux-x86_64.tar.gz".to_string(),
+                size: 200,
+            },
+            GitHubReleaseAsset {
+                name: "gitcomet-v0.2.0-windows-x86_64-portable.zip".to_string(),
+                browser_download_url: "https://example.com/windows-x86_64-portable.zip".to_string(),
+                size: 300,
+            },
+        ];
+
+        // On any platform, resolve_platform_asset should find one of the assets
+        let result = resolve_platform_asset(&assets);
+        assert!(result.is_some(), "should find a matching asset for the current platform");
+    }
+
+    #[test]
+    fn resolve_platform_asset_returns_none_for_empty_assets() {
+        assert!(resolve_platform_asset(&[]).is_none());
+    }
+
+    #[test]
+    fn build_update_notice_populates_download_url_from_assets() {
+        let repo = GitHubRepo::from_slug("Auto-Explore/GitComet");
+        let (os_part, arch_part, extension) = platform_asset_identifiers();
+        let asset_name = format!("gitcomet-v0.2.1-{os_part}-{arch_part}{extension}");
+
+        let release = GitHubRelease {
+            tag_name: "v0.2.1".to_string(),
+            html_url: Some("https://example.invalid/releases/0.2.1".to_string()),
+            assets: vec![GitHubReleaseAsset {
+                name: asset_name.clone(),
+                browser_download_url: format!("https://example.com/{asset_name}"),
+                size: 500,
+            }],
+        };
+
+        let notice =
+            build_update_notice("0.2.0", &release, &repo).expect("update notice expected");
+        assert!(notice.download_url.is_some());
     }
 }

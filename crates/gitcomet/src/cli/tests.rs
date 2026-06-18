@@ -3200,3 +3200,36 @@ fn extract_merge_fixtures_rejects_zero_limits() {
         "unexpected error: {err}"
     );
 }
+
+#[test]
+fn apply_update_parses_hidden_subcommand() {
+    let env = TestEnv::new();
+    let mode = parse_app_mode_from_args_env_and_config(
+        vec![
+            "gitcomet".into(),
+            "apply-update".into(),
+            "--wait-pid".into(),
+            "42".into(),
+            "--target-exe".into(),
+            "/tmp/gitcomet".into(),
+            "--new-binary".into(),
+            "/tmp/staging/gitcomet".into(),
+            "--staging-dir".into(),
+            "/tmp/staging".into(),
+        ],
+        &env,
+        &|_| None,
+    )
+    .expect("parse apply-update mode");
+
+    match mode {
+        AppMode::ApplyUpdate(request) => {
+            assert_eq!(request.wait_pid, 42);
+            assert_eq!(request.target_exe, PathBuf::from("/tmp/gitcomet"));
+            assert_eq!(request.new_binary, PathBuf::from("/tmp/staging/gitcomet"));
+            assert_eq!(request.staging_dir, PathBuf::from("/tmp/staging"));
+            assert!(request.app_bundle.is_none());
+        }
+        other => panic!("expected ApplyUpdate mode, got: {other:?}"),
+    }
+}

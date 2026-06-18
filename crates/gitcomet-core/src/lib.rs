@@ -1,3 +1,4 @@
+pub mod apply_update;
 pub mod auth;
 pub mod conflict_labels;
 pub mod conflict_output;
