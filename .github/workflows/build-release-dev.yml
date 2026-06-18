@@ -1,0 +1,223 @@
+# Dev / fork testing workflow — build unsigned macOS release assets from a tag.
+#
+# Triggers:
+#   git tag v0.1.16-dev && git push origin v0.1.16-dev
+#   git tag v0.1.16-test.1 && git push origin v0.1.16-test.1
+#
+# Also: Actions → "Build Dev Release (Tag)" → Run workflow (optional tag input).
+#
+# Creates a GitHub prerelease and uploads tar.gz (+ dmg when built).
+# No Windows signing, no Homebrew/AUR/APT deploy — not for production.
+
+name: Build Dev Release (Tag)
+
+on:
+  push:
+    tags:
+      - "v*-dev"
+      - "v*-dev.*"
+      - "v*-test"
+      - "v*-test.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build (e.g. v0.1.16-dev). Defaults to the pushed tag or branch ref."
+        required: false
+        type: string
+      upload_release:
+        description: "Create/update GitHub prerelease and upload assets"
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-release-dev-${{ github.event.inputs.tag || github.ref_name || github.run_id }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  prepare:
+    name: Normalize dev release metadata
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    outputs:
+      tag: ${{ steps.norm.outputs.tag }}
+      version: ${{ steps.norm.outputs.version }}
+      upload_release: ${{ steps.norm.outputs.upload_release }}
+    steps:
+      - name: Normalize tag and version
+        id: norm
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+          EVENT_NAME: ${{ github.event_name }}
+          UPLOAD_RELEASE: ${{ github.event.inputs.upload_release }}
+        run: |
+          set -euo pipefail
+
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            tag="${INPUT_TAG:-$REF_NAME}"
+            upload_release="${UPLOAD_RELEASE:-true}"
+          else
+            tag="$REF_NAME"
+            upload_release="true"
+          fi
+
+          tag="$(echo "$tag" | tr -d '[:space:]')"
+
+          if [ -z "$tag" ]; then
+            echo "::error title=Missing tag::Tag is required."
+            exit 1
+          fi
+
+          if [[ "$tag" != v* ]]; then
+            tag="v${tag}"
+          fi
+
+          version="${tag#v}"
+
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-(rc\.[0-9]+|dev(\.[0-9]+)?|test(\.[0-9]+)?))?$ ]]; then
+            echo "::error title=Invalid dev version::Expected semver like 0.1.16-dev, 0.1.16-dev.1, or 0.1.16-test."
+            exit 1
+          fi
+
+          if [[ "$version" != *-dev* && "$version" != *-test* ]]; then
+            echo "::error title=Not a dev/test tag::Use tags ending with -dev or -test (e.g. v0.1.16-dev)."
+            echo "::error title=Production releases::Use release-manual-main.yml instead."
+            exit 1
+          fi
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "upload_release=$upload_release" >> "$GITHUB_OUTPUT"
+          echo "Dev release tag: $tag (version $version)"
+
+  build_macos:
+    name: Build macOS dev artifacts (${{ matrix.target_platform }})
+    runs-on: ${{ matrix.runs_on }}
+    timeout-minutes: 120
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target_platform: aarch64-darwin
+            arch: arm64
+            runs_on: macos-latest
+          - target_platform: x86_64-darwin
+            arch: x86_64
+            runs_on: macos-15-intel
+    env:
+      TAG: ${{ needs.prepare.outputs.tag }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+      ARCH: ${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: false
+
+      - name: Package unsigned macOS release assets
+        env:
+          GITCOMET_MACOS_PACKAGE_CLEAN_TARGET: "1"
+        run: |
+          set -euo pipefail
+          scripts/package-macos.sh \
+            --version "${VERSION}" \
+            --arch "${ARCH}" \
+            --release \
+            --out-dir dist
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: dev-macos-artifacts-${{ matrix.target_platform }}
+          path: |
+            dist/*.tar.gz
+            dist/*.dmg
+          if-no-files-found: error
+          retention-days: 7
+
+  publish_dev_release:
+    name: Publish dev prerelease assets
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    needs: [prepare, build_macos]
+    if: ${{ needs.prepare.outputs.upload_release == 'true' }}
+    env:
+      TAG: ${{ needs.prepare.outputs.tag }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: dev-macos-artifacts-*
+          path: dist/macos
+          merge-multiple: true
+
+      - name: Assemble release payload
+        run: |
+          set -euo pipefail
+          mkdir -p dist/release
+          find dist/macos -maxdepth 1 -type f -exec cp -f {} dist/release/ \;
+          file_count="$(find dist/release -maxdepth 1 -type f | wc -l | tr -d '[:space:]')"
+          if [ "${file_count}" = "0" ]; then
+            echo "::error title=No dev artifacts::No files were assembled into dist/release."
+            exit 1
+          fi
+          ls -lah dist/release
+
+      - name: Create or update GitHub prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "GitComet $TAG (dev)" \
+              --notes "Development/fork test build. Not for production distribution." \
+              --prerelease \
+              --target "$TAG"
+          else
+            gh release edit "$TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --prerelease \
+              --title "GitComet $TAG (dev)"
+          fi
+
+      - name: Upload assets to GitHub prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release upload "$TAG" dist/release/* --clobber --repo "$GITHUB_REPOSITORY"
+
+      - name: Emit dev release summary
+        run: |
+          set -euo pipefail
+          {
+            echo "### Dev release published"
+            echo ""
+            echo "- Tag: \`$TAG\`"
+            echo "- Version: \`$VERSION\`"
+            echo "- Prerelease: \`yes\`"
+            echo ""
+            echo "Test locally with:"
+            echo "\`GITCOMET_UPDATE_REPO=${GITHUB_REPOSITORY}\`"
+            echo ""
+            echo "Assets:"
+            ls -1 dist/release | sed 's/^/- `/;s/$/`/'
+          } >> "$GITHUB_STEP_SUMMARY"
